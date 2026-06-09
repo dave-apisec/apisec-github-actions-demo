@@ -52,7 +52,22 @@ jobs:
             -e APISEC_AUTH_ID \
             -e APISEC_MAX_CRITICAL \
             -e APISEC_MAX_HIGH \
-            "$IMAGE"
+            "$IMAGE" > /tmp/apisec-output.txt 2>&1
+          EXIT_CODE=$?
+          cat /tmp/apisec-output.txt
+          exit $EXIT_CODE
+
+      - name: Extract scan ID from container output
+        id: scan-id
+        if: always()
+        run: |
+          # Pull any UUID from the output that isn't the known app/instance IDs
+          SCAN_ID=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' \
+            /tmp/apisec-output.txt 2>/dev/null \
+            | grep -v '019e8da0-0070-79ce-82f2-6cf6b832fc6d' \
+            | grep -v '019e8da0-51d3-701e-a4fc-ece0eac25d80' \
+            | head -1 || echo "")
+          echo "scan_id=${SCAN_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Post scan summary to PR
         if: always() && github.event_name == 'pull_request'
@@ -60,6 +75,10 @@ jobs:
         with:
           script: |
             const blocked = '${{ steps.gate.outcome }}' !== 'success';
+            const scanId  = '${{ steps.scan-id.outputs.scan_id }}';
+            const scanUrl = scanId
+              ? `https://itau.apisecapps.com/application/019e8da0-0070-79ce-82f2-6cf6b832fc6d/instance/019e8da0-51d3-701e-a4fc-ece0eac25d80/scans/${scanId}`
+              : `https://itau.apisecapps.com/application/019e8da0-0070-79ce-82f2-6cf6b832fc6d/instance/019e8da0-51d3-701e-a4fc-ece0eac25d80/scans`;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
@@ -71,6 +90,8 @@ jobs:
                 '| Severity Gate | Result |',
                 '|---|---|',
                 `| 🔴 Critical / High (blocking) | ${blocked ? '❌ **BLOCKED** — resolve findings before merging' : '✅ Passed — no Critical or High findings'} |`,
+                '',
+                `[**View scan results in APIsec →**](${scanUrl})`,
                 '',
                 blocked
                   ? '> **This PR is blocked from merging.** Resolve all Critical and High severity findings and re-run the scan.'
