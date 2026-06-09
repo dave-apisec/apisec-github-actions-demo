@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  apisec-security-gate:
-    name: APIsec Security Gate
+  apisec-trigger-scan:
+    name: APIsec Trigger Scan (no gate)
     # RFP.2.1 — Ephemeral GitHub-hosted runner; destroyed after each run.
     runs-on: ubuntu-latest
 
@@ -21,42 +21,56 @@ jobs:
         uses: actions/checkout@v4
 
       # ─────────────────────────────────────────────────────────────────────────
-      # DEMO BRANCH: demo/scan-pass
-      # Thresholds set high so the scan runs and reports findings,
-      # but the pipeline does NOT block — the PR check passes.
+      # RFP.2.1 — Trigger a scan via the APIsec REST API.
+      # No severity gate — the workflow always passes; findings land in the
+      # APIsec dashboard for async review.
       #
-      # RFP.2.1 — Credential handling:
-      #   APISEC_TOKEN  → GitHub repository Secret (masked in logs)
-      #   APISEC_AUTH_ID → GitHub repository Variable (non-sensitive)
+      # Credential handling:
+      #   APISEC_TOKEN  → GitHub repository Secret (masked in all logs)
+      #   APISEC_AUTH_ID → GitHub repository Variable (non-sensitive config)
       # ─────────────────────────────────────────────────────────────────────────
-      - name: "APIsec Scan — Advisory only (no severity gate)"
-        id: scan
+      - name: "Trigger APIsec scan via API"
+        id: trigger-scan
         env:
-          APISEC_TOKEN:        ${{ secrets.APISEC_TOKEN }}
-          APISEC_HOST:         https://api.apisecapps.com
-          APISEC_APP_ID:       019e8da0-0070-79ce-82f2-6cf6b832fc6d
-          APISEC_INSTANCE_ID:  019e8da0-51d3-701e-a4fc-ece0eac25d80
-          APISEC_AUTH_ID:      ${{ vars.APISEC_AUTH_ID }}
-          APISEC_MAX_CRITICAL: "999"  # High threshold — scan runs, nothing blocks
-          APISEC_MAX_HIGH:     "999"
-          IMAGE: docker.io/apisec/apisec-scan-and-gate:latest
+          APISEC_TOKEN: ${{ secrets.APISEC_TOKEN }}
         run: |
-          docker run --rm \
-            -e APISEC_TOKEN \
-            -e APISEC_HOST \
-            -e APISEC_APP_ID \
-            -e APISEC_INSTANCE_ID \
-            -e APISEC_AUTH_ID \
-            -e APISEC_MAX_CRITICAL \
-            -e APISEC_MAX_HIGH \
-            "$IMAGE"
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST \
+            "https://api.apisecapps.com/v1/applications/019b92e1-4da9-7d98-8795-88e512afdb39/instances/019b936e-1d44-7031-8bdd-4961bff01b6d/scan" \
+            -H "Authorization: Bearer ${APISEC_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "endpointIds": [
+                "R0VUOi9jb21tdW5pdHkvYXBpL3YyL2NvbW11bml0eS9wb3N0cy97cG9zdElkfQ==",
+                "R0VUOi93b3Jrc2hvcC9hcGkvc2hvcC9vcmRlcnMve29yZGVyX2lkfQ==",
+                "R0VUOi93b3Jrc2hvcC9hcGkvc2hvcC9vcmRlcnMvYWxs"
+              ],
+              "scanWithAuthId": "${{ vars.APISEC_AUTH_ID }}"
+            }')
 
-      - name: Post scan summary to PR
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS:")
+
+          echo "HTTP status: $HTTP_STATUS"
+          echo "$BODY"
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            SCAN_ID=$(echo "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id','unknown'))" 2>/dev/null || echo "unknown")
+            echo "scan_id=$SCAN_ID" >> "$GITHUB_OUTPUT"
+            echo "Scan triggered — ID: $SCAN_ID"
+          else
+            echo "Failed to trigger scan (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
+
+      - name: Post scan link to PR
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            const passed = '${{ steps.scan.outcome }}' === 'success';
+            const triggered = '${{ steps.trigger-scan.outcome }}' === 'success';
+            const scanId    = '${{ steps.trigger-scan.outputs.scan_id }}';
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner:        context.repo.owner,
@@ -64,10 +78,10 @@ jobs:
               body: [
                 '## APIsec API Security Scan',
                 '',
-                '| Severity Gate | Result |',
-                '|---|---|',
-                `| No severity gate (advisory only) | ${passed ? '✅ Scan complete — findings reported to APIsec dashboard' : '⚠️ Scan encountered an error'} |`,
+                triggered
+                  ? `✅ Scan triggered successfully (ID: \`${scanId}\`). Results will be available in the [APIsec dashboard](https://app.apisecapps.com).`
+                  : '❌ Failed to trigger APIsec scan — check the Actions log for details.',
                 '',
-                '> This branch runs APIsec in advisory mode. Findings are visible in the APIsec dashboard but do not block this PR.',
+                '> This PR uses an advisory-only scan. No severity gate is applied; findings do not block merging.',
               ].join('\n'),
             });
