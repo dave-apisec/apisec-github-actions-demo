@@ -26,8 +26,10 @@ jobs:
       # APIsec dashboard for async review.
       #
       # Credential handling:
-      #   APISEC_TOKEN  → GitHub repository Secret (masked in all logs)
-      #   APISEC_AUTH_ID → GitHub repository Variable (non-sensitive config)
+      #   APISEC_TOKEN       → GitHub repository Secret (masked in all logs)
+      #   APISEC_AUTH_ID     → GitHub repository Variable (non-sensitive config)
+      #   APISEC_APP_ID      → GitHub repository Variable
+      #   APISEC_INSTANCE_ID → GitHub repository Variable
       # ─────────────────────────────────────────────────────────────────────────
       - name: "Trigger APIsec scan via API"
         id: trigger-scan
@@ -36,17 +38,10 @@ jobs:
         run: |
           RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
             -X POST \
-            "https://api.apisecapps.com/v1/applications/019b92e1-4da9-7d98-8795-88e512afdb39/instances/019b936e-1d44-7031-8bdd-4961bff01b6d/scan" \
+            "https://api.apisecapps.com/v1/applications/${{ vars.APISEC_APP_ID }}/instances/${{ vars.APISEC_INSTANCE_ID }}/scan" \
             -H "Authorization: Bearer ${APISEC_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d '{
-              "endpointIds": [
-                "R0VUOi9jb21tdW5pdHkvYXBpL3YyL2NvbW11bml0eS9wb3N0cy97cG9zdElkfQ==",
-                "R0VUOi93b3Jrc2hvcC9hcGkvc2hvcC9vcmRlcnMve29yZGVyX2lkfQ==",
-                "R0VUOi93b3Jrc2hvcC9hcGkvc2hvcC9vcmRlcnMvYWxs"
-              ],
-              "scanWithAuthId": "${{ vars.APISEC_AUTH_ID }}"
-            }')
+            -d '{"scanWithAuthId": "${{ vars.APISEC_AUTH_ID }}"}')
 
           HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
           BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS:")
@@ -70,8 +65,7 @@ jobs:
           script: |
             const triggered = '${{ steps.trigger-scan.outcome }}' === 'success';
             const scanId    = '${{ steps.trigger-scan.outputs.scan_id }}';
-
-            const scanUrl = `https://itau.apisecapps.com/application/019b92e1-4da9-7d98-8795-88e512afdb39/instance/019b936e-1d44-7031-8bdd-4961bff01b6d/scans/${scanId}`;
+            const scanUrl   = `https://itau.apisecapps.com/application/${{ vars.APISEC_APP_ID }}/instance/${{ vars.APISEC_INSTANCE_ID }}/scans/${scanId}`;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
