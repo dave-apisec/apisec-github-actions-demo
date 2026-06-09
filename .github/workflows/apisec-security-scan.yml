@@ -71,6 +71,8 @@ jobs:
             const triggered = '${{ steps.trigger-scan.outcome }}' === 'success';
             const scanId    = '${{ steps.trigger-scan.outputs.scan_id }}';
 
+            const scanUrl = `https://itau.apisecapps.com/application/019b92e1-4da9-7d98-8795-88e512afdb39/instance/019b936e-1d44-7031-8bdd-4961bff01b6d/scans/${scanId}`;
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner:        context.repo.owner,
@@ -79,7 +81,7 @@ jobs:
                 '## APIsec API Security Scan',
                 '',
                 triggered
-                  ? `✅ Scan triggered successfully (ID: \`${scanId}\`). Results will be available in the [APIsec dashboard](https://app.apisecapps.com).`
+                  ? `✅ Scan triggered successfully — [**View results in APIsec →**](${scanUrl})`
                   : '❌ Failed to trigger APIsec scan — check the Actions log for details.',
                 '',
                 '> This PR uses an advisory-only scan. No severity gate is applied; findings do not block merging.',
