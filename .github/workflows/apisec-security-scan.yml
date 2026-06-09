@@ -22,11 +22,10 @@ jobs:
 
       # ─────────────────────────────────────────────────────────────────────────
       # RFP.2.1 — Credential handling:
-      #   APISEC_TOKEN   → GitHub repository Secret (masked in all logs; blocked
-      #                    from fork PRs by default)
-      #   APISEC_AUTH_ID → GitHub repository Variable (non-sensitive config)
-      #   Credentials are injected via environment variables only — never
-      #   written to disk or passed as command-line arguments.
+      #   APISEC_TOKEN       → GitHub repository Secret (masked in all logs)
+      #   APISEC_AUTH_ID     → GitHub repository Variable (non-sensitive config)
+      #   APISEC_APP_ID      → GitHub repository Variable
+      #   APISEC_INSTANCE_ID → GitHub repository Variable
       #
       # RFP.2.2 — Severity gate: BLOCKING on Critical and High
       #   APISEC_MAX_CRITICAL: "0" → any Critical exits non-zero → PR blocked
@@ -37,8 +36,8 @@ jobs:
         env:
           APISEC_TOKEN:        ${{ secrets.APISEC_TOKEN }}
           APISEC_HOST:         https://api.apisecapps.com
-          APISEC_APP_ID:       019e8da0-0070-79ce-82f2-6cf6b832fc6d
-          APISEC_INSTANCE_ID:  019e8da0-51d3-701e-a4fc-ece0eac25d80
+          APISEC_APP_ID:       ${{ vars.APISEC_APP_ID }}
+          APISEC_INSTANCE_ID:  ${{ vars.APISEC_INSTANCE_ID }}
           APISEC_AUTH_ID:      ${{ vars.APISEC_AUTH_ID }}
           APISEC_MAX_CRITICAL: "0"
           APISEC_MAX_HIGH:     "0"
@@ -61,11 +60,10 @@ jobs:
         id: scan-id
         if: always()
         run: |
-          # Pull any UUID from the output that isn't the known app/instance IDs
           SCAN_ID=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' \
             /tmp/apisec-output.txt 2>/dev/null \
-            | grep -v '019e8da0-0070-79ce-82f2-6cf6b832fc6d' \
-            | grep -v '019e8da0-51d3-701e-a4fc-ece0eac25d80' \
+            | grep -v '${{ vars.APISEC_APP_ID }}' \
+            | grep -v '${{ vars.APISEC_INSTANCE_ID }}' \
             | head -1 || echo "")
           echo "scan_id=${SCAN_ID}" >> "$GITHUB_OUTPUT"
 
@@ -76,9 +74,8 @@ jobs:
           script: |
             const blocked = '${{ steps.gate.outcome }}' !== 'success';
             const scanId  = '${{ steps.scan-id.outputs.scan_id }}';
-            const scanUrl = scanId
-              ? `https://itau.apisecapps.com/application/019e8da0-0070-79ce-82f2-6cf6b832fc6d/instance/019e8da0-51d3-701e-a4fc-ece0eac25d80/scans/${scanId}`
-              : `https://itau.apisecapps.com/application/019e8da0-0070-79ce-82f2-6cf6b832fc6d/instance/019e8da0-51d3-701e-a4fc-ece0eac25d80/scans`;
+            const base    = `https://itau.apisecapps.com/application/${{ vars.APISEC_APP_ID }}/instance/${{ vars.APISEC_INSTANCE_ID }}/scans`;
+            const scanUrl = scanId ? `${base}/${scanId}` : base;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
