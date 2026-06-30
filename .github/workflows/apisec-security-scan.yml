@@ -1,0 +1,83 @@
+name: APIsec Security Scan
+
+# RFP.2.1 — Triggered on every pull request targeting develop or main.
+on:
+  pull_request:
+    branches: [develop, main, master]
+  workflow_dispatch:
+
+jobs:
+  apisec-trigger-scan:
+    name: APIsec Trigger Scan (no gate)
+    # RFP.2.1 — Ephemeral GitHub-hosted runner; destroyed after each run.
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # RFP.2.1 — Trigger a scan via the APIsec REST API.
+      # No severity gate — the workflow always passes; findings land in the
+      # APIsec dashboard for async review.
+      #
+      # Credential handling:
+      #   APISEC_TOKEN       → GitHub repository Secret (masked in all logs)
+      #   APISEC_AUTH_ID     → GitHub repository Variable (non-sensitive config)
+      #   APISEC_APP_ID      → GitHub repository Variable
+      #   APISEC_INSTANCE_ID → GitHub repository Variable
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: "Trigger APIsec scan via API"
+        id: trigger-scan
+        env:
+          APISEC_TOKEN: ${{ secrets.APISEC_TOKEN }}
+        run: |
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST \
+            "https://api.apisecapps.com/v1/applications/${{ vars.APISEC_APP_ID }}/instances/${{ vars.APISEC_INSTANCE_ID }}/scan" \
+            -H "Authorization: Bearer ${APISEC_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"scanWithAuthId": "${{ vars.APISEC_AUTH_ID }}"}')
+
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS:")
+
+          echo "HTTP status: $HTTP_STATUS"
+          echo "$BODY"
+
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            SCAN_ID=$(echo "$BODY" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id','unknown'))" 2>/dev/null || echo "unknown")
+            echo "scan_id=$SCAN_ID" >> "$GITHUB_OUTPUT"
+            echo "Scan triggered — ID: $SCAN_ID"
+          else
+            echo "Failed to trigger scan (HTTP $HTTP_STATUS)"
+            exit 1
+          fi
+
+      - name: Post scan link to PR
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const triggered = '${{ steps.trigger-scan.outcome }}' === 'success';
+            const scanId    = '${{ steps.trigger-scan.outputs.scan_id }}';
+            const scanUrl   = `https://itau.apisecapps.com/application/${{ vars.APISEC_APP_ID }}/instance/${{ vars.APISEC_INSTANCE_ID }}/scans/${scanId}`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner:        context.repo.owner,
+              repo:         context.repo.repo,
+              body: [
+                '## APIsec API Security Scan',
+                '',
+                triggered
+                  ? `✅ Scan triggered successfully — [**View results in APIsec →**](${scanUrl})`
+                  : '❌ Failed to trigger APIsec scan — check the Actions log for details.',
+                '',
+                '> This PR uses an advisory-only scan. No severity gate is applied; findings do not block merging.',
+              ].join('\n'),
+            });
